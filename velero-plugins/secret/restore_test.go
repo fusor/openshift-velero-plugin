@@ -1,12 +1,12 @@
-package route
+package secret
 
 import (
 	"encoding/json"
 	"github.com/konveyor/openshift-velero-plugin/velero-plugins/util/test"
-	routev1API "github.com/openshift/api/route/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
+	corev1API "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"testing"
@@ -16,61 +16,46 @@ func TestRestorePluginAppliesTo(t *testing.T) {
 	restorePlugin := &RestorePlugin{Log: test.NewLogger()}
 	actual, err := restorePlugin.AppliesTo()
 	require.NoError(t, err)
-	assert.Equal(t, velero.ResourceSelector{IncludedResources: []string{"routes"}}, actual)
+	assert.Equal(t, velero.ResourceSelector{IncludedResources: []string{"secrets"}}, actual)
 }
 
 func TestRestorePlugin_Execute(t *testing.T) {
 	restorePlugin := &RestorePlugin{Log: test.NewLogger()}
 
 	testcase := map[string]struct {
-		route routev1API.Route
-		want  string
+		secret corev1API.Secret
+		want   bool
 	}{
-		"empty": {route: routev1API.Route{Spec:
-		routev1API.RouteSpec{Host: ""},
-		}, want: ""},
-
-		"true": {route: routev1API.Route{ObjectMeta: metav1.ObjectMeta{
+		"NoAnnotation": {secret: corev1API.Secret{}, want: false},
+		"WithAnnotation": {secret: corev1API.Secret{ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
-				"openshift.io/host.generated": "true",
+				serviceOriginAnnotation: "value",
 			},
 		},
-			Spec:
-			routev1API.RouteSpec{Host: "test"},
-		}, want: ""},
-
-		"static": {route: routev1API.Route{ObjectMeta: metav1.ObjectMeta{
+		}, want: true},
+		"WrongAnnotation": {secret: corev1API.Secret{ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
-				"openshift.io/host.generated": "",
+				"Wrong Annotation": "value",
 			},
 		},
-			Spec:
-			routev1API.RouteSpec{Host: "temp"},
-		}, want: "temp"},
+		}, want: false},
 	}
 
 	for i, tc := range testcase {
 		t.Run(string(i), func(t *testing.T) {
 			var out map[string]interface{}
 			item := unstructured.Unstructured{}
-			routeRec, _ := json.Marshal(tc.route)
-			json.Unmarshal(routeRec, &out)
+			secretRec, _ := json.Marshal(tc.secret)
+			json.Unmarshal(secretRec, &out)
 			item.SetUnstructuredContent(out)
 
 			input := velero.RestoreItemActionExecuteInput{Item: &item,
 			}
-
 			output, _ := restorePlugin.Execute(&input)
 
-			route := routev1API.Route{}
-			itemMarshal, _ := json.Marshal(output.UpdatedItem)
-			json.Unmarshal(itemMarshal, &route)
-
-			if tc.want != route.Spec.Host {
-				t.Log(route.Spec.Host)
-				t.Fatalf("expected: %v, got: %v", tc.want, route.Spec.Host)
+			if tc.want != output.SkipRestore {
+				t.Fatalf("expected: %v, got: %v", tc.want, output.SkipRestore)
 			}
 		})
 	}
-
 }
